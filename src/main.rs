@@ -1,10 +1,11 @@
-use std::sync::mpsc::channel;
+use std::{net::SocketAddr, sync::mpsc::channel};
 
 use anyhow::anyhow;
 
 use teloxide::{
     dispatching::dialogue::{self, InMemStorage},
     prelude::*,
+    update_listeners::webhooks,
 };
 
 type MyDialogue = Dialogue<State, InMemStorage<State>>;
@@ -17,7 +18,14 @@ pub enum State {
     AskQuestion,
 }
 
-const channel_id: ChatId = ChatId(-1001284674171);
+fn get_channel_id() -> ChatId {
+    return ChatId(
+        std::env::var("CHANNEL_ID")
+            .expect("Unable to read CHANNEL_ID from ENV")
+            .parse()
+            .expect("Unable to parse CHANNEL_ID as i64"),
+    );
+}
 
 #[tokio::main]
 async fn main() {
@@ -26,6 +34,25 @@ async fn main() {
     log::info!("Starting throw dice bot...");
 
     let bot = Bot::from_env();
+
+    let channel_id = ChatId(
+        std::env::var("CHANNEL_ID")
+            .expect("Unable to read CHANNEL_ID from ENV")
+            .parse()
+            .expect("Unable to parse CHANNEL_ID as i64"),
+    );
+
+    let addr: SocketAddr = std::env::var("HOST")
+        .expect("Unable to read HOST from ENV")
+        .parse()
+        .expect("Unable to parse HOST as SocketAddr");
+    let url = std::env::var("LISTEN_URL")
+        .expect("Unable to read LISTEN_URL from ENV")
+        .parse()
+        .expect("Unable to parse LISTEN_URL as url");
+    let listener = webhooks::axum(bot.clone(), webhooks::Options::new(addr, url))
+        .await
+        .expect("Couldn't setup webhook");
 
     Dispatcher::builder(
         bot,
@@ -37,7 +64,10 @@ async fn main() {
     .dependencies(dptree::deps![InMemStorage::<State>::new()])
     .enable_ctrlc_handler()
     .build()
-    .dispatch()
+    .dispatch_with_listener(
+        listener,
+        LoggingErrorHandler::with_custom_text("An error from the update listener"),
+    )
     .await;
 }
 
@@ -53,9 +83,8 @@ async fn start(bot: Bot, dialogue: MyDialogue, msg: Message) -> HandlerResult {
 
 async fn ask_question(bot: Bot, dialogue: MyDialogue, msg: Message) -> HandlerResult {
     let message = msg.text().ok_or(anyhow!("Fail to read message"))?;
-    log::info!("Message: {}", message);
     bot.send_message(msg.chat.id, "Спасибо за вопрос!").await?;
-    bot.send_message(channel_id, message).await?;
+    bot.send_message(get_channel_id(), message).await?;
     dialogue.update(State::Start).await?;
     Ok(())
 }
